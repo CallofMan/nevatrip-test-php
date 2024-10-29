@@ -1,10 +1,21 @@
 <?php
 function createOrder($event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity) {
-    // Подключение к БД
-    $mysqli = new mysqli("localhost", "user", "password", "database");
+    $mysqli = new mysqli("localhost", "root", "", "nevatrip-test-1");
     if ($mysqli->connect_errno) {
         die("Ошибка подключения: " . $mysqli->connect_error);
     }
+
+    // Проверка на уникальность event_id
+    $stmt = $mysqli->prepare("SELECT id FROM nevatrip_order WHERE event_id = ?");
+    $stmt->bind_param("i", $event_id);
+    $stmt->execute();
+    $stmt->store_result();
+    if ($stmt->num_rows > 0) {
+        $stmt->close();
+        $mysqli->close();
+        return "Заказ с таким event_id уже существует!";
+    }
+    $stmt->close();
 
     // Генерация уникального штрихкода
     $barcode = generateUniqueBarcode($mysqli);
@@ -27,44 +38,43 @@ function createOrder($event_id, $event_date, $ticket_adult_price, $ticket_adult_
         if (isset($bookingResponse['message']) && $bookingResponse['message'] === 'order successfully booked') {
             break;
         } elseif (isset($bookingResponse['error']) && $bookingResponse['error'] === 'barcode already exists') {
-            // Генерируем новый уникальный штрихкод
             $barcode = generateUniqueBarcode($mysqli);
             $orderData['barcode'] = $barcode;
         } else {
-            die("Ошибка при бронировании: " . $bookingResponse['error']);
+            $mysqli->close();
+            return "Ошибка при бронировании: " . $bookingResponse['error'];
         }
     }
 
     // Подтверждение бронирования
     $approvalResponse = mockApprovalAPI(['barcode' => $barcode]);
     if (isset($approvalResponse['message']) && $approvalResponse['message'] === 'order successfully approved') {
-        // Вычисление общей стоимости заказа
         $equal_price = ($ticket_adult_price * $ticket_adult_quantity) + ($ticket_kid_price * $ticket_kid_quantity);
         
         // Сохранение заказа в БД
-        $stmt = $mysqli->prepare("INSERT INTO orders (event_id, event_date, ticket_adult_price, ticket_adult_quantity, ticket_kid_price, ticket_kid_quantity, barcode, equal_price, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+        $stmt = $mysqli->prepare("INSERT INTO nevatrip_order (event_id, event_date, ticket_adult_price, ticket_adult_quantity, ticket_kid_price, ticket_kid_quantity, barcode, equal_price, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
         $stmt->bind_param("isiiisis", $event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity, $barcode, $equal_price);
         $stmt->execute();
         $stmt->close();
     } else {
-        die("Ошибка подтверждения заказа: " . $approvalResponse['error']);
+        $mysqli->close();
+        return "Ошибка подтверждения заказа: " . $approvalResponse['error'];
     }
 
-    // Закрытие соединения с БД
     $mysqli->close();
+    return "Заказ успешно создан с штрихкодом: " . $barcode;
 }
 
 function generateUniqueBarcode($mysqli) {
     do {
         $barcode = strval(random_int(10000000, 99999999));
-        $result = $mysqli->query("SELECT id FROM orders WHERE barcode = '$barcode'");
+        $result = $mysqli->query("SELECT id FROM nevatrip_order WHERE barcode = '$barcode'");
     } while ($result->num_rows > 0);
 
     return $barcode;
 }
 
 function mockBookingAPI($data) {
-    // Возвращаем мокированные данные для бронирования
     $responses = [
         ['message' => 'order successfully booked'],
         ['error' => 'barcode already exists']
@@ -73,7 +83,6 @@ function mockBookingAPI($data) {
 }
 
 function mockApprovalAPI($data) {
-    // Возвращаем мокированные данные для подтверждения
     $responses = [
         ['message' => 'order successfully approved'],
         ['error' => 'event cancelled'],
@@ -84,5 +93,5 @@ function mockApprovalAPI($data) {
     return $responses[array_rand($responses)];
 }
 
-createOrder('11', '12-20-2001', 500, 2, 300, 3);
+echo createOrder(1, '2024-08-21', 500, 2, 300, 3);
 ?>
